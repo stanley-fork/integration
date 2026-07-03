@@ -38,6 +38,7 @@ from ..MenderAPI import (
 )
 from .mendertesting import MenderTesting
 from ..helpers import Helpers
+from flaky import flaky
 
 
 class DeviceAuthFailover(DeviceAuthV2):
@@ -265,6 +266,10 @@ class BaseTestBasicIntegration(MenderTesting):
         pytest.fail("The inventory was not updated")
 
 
+# Retry the intermittent "Device never rebooted" infra flake: the QEMU VM
+# sometimes does not come back after an update-triggered reboot. A flaky rerun
+# tears down the dead VM and boots a fresh one.
+@flaky(max_runs=3)
 class TestBasicIntegrationOpenSource(BaseTestBasicIntegration):
     @MenderTesting.fast
     def test_update_failover_server(self, setup_failover, valid_image):
@@ -392,6 +397,7 @@ class TestBasicIntegrationOpenSource(BaseTestBasicIntegration):
         )
 
 
+@flaky(max_runs=3)
 class TestBasicIntegrationEnterprise(BaseTestBasicIntegration):
     @MenderTesting.fast
     def test_double_update_rofs(

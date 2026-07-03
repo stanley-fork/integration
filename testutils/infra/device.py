@@ -251,7 +251,9 @@ class RebootDetector:
 
         cmd = "systemctl stop mender-reboot-detector ; rm -f /data/mender/test.mender-reboot-detector.txt"
         try:
-            self.device.run(cmd)
+            # Fail fast: after a failed reboot the device is often unreachable, so
+            # don't burn the full retry budget stopping the detector on a dead device.
+            self.device.run(cmd, wait=60)
         except:
             logger.error("Unable to stop reboot-detector:\n%s", traceback.format_exc())
             # Only produce our own exception if we won't be hiding an
@@ -297,7 +299,9 @@ class RebootDetector:
                 logger.info("Client has rebooted %d time(s)", reboot_count)
                 return True
 
-    def verify_reboot_performed(self, max_wait=10 * 60, number_of_reboots=1):
+    # 5 min is ample for a healthy QEMU reboot (even the multi-reboot cases); a
+    # genuine reboot hang should fail fast rather than burn 10 min waiting.
+    def verify_reboot_performed(self, max_wait=5 * 60, number_of_reboots=1):
         if self.server is None:
             raise RuntimeError(
                 "verify_reboot_performed() used outside of 'with' scope."
