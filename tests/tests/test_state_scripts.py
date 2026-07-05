@@ -30,7 +30,6 @@ from ..helpers import Helpers
 from ..MenderAPI import DeviceAuthV2, Deployments, logger, image
 from .mendertesting import MenderTesting
 from testutils.infra.device import MenderDeviceGroup
-from flaky import flaky
 
 
 @pytest.fixture(scope="class")
@@ -934,9 +933,6 @@ class BaseTestStateScripts(MenderTesting):
             raise
 
 
-# Retry the intermittent "Device never rebooted" infra flake: the QEMU VM
-# sometimes does not come back after a reboot. A flaky rerun sets up a fresh VM.
-@flaky(max_runs=3)
 class TestStateScriptsOpenSource(BaseTestStateScripts):
     @pytest.mark.parametrize("description,test_set", REBOOT_TEST_SET)
     def test_reboot_recovery(
@@ -966,7 +962,6 @@ class TestStateScriptsOpenSource(BaseTestStateScripts):
         )
 
 
-@flaky(max_runs=3)
 class TestStateScriptsEnterprise(BaseTestStateScripts):
     @pytest.mark.parametrize("description,test_set", REBOOT_TEST_SET)
     def test_reboot_recovery(
