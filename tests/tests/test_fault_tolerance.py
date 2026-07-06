@@ -26,6 +26,7 @@ from ..common_setup import (
 from .common_update import common_update_procedure, update_image_failed
 from ..MenderAPI import DeviceAuthV2, Deployments, logger
 from .mendertesting import MenderTesting
+from flaky import flaky
 
 
 class BasicTestFaultTolerance(MenderTesting):
@@ -499,6 +500,10 @@ class BasicTestFaultTolerance(MenderTesting):
             shutil.rmtree(tmpdir)
 
 
+# Retry the intermittent "Device never rebooted" infra flake: the QEMU VM
+# sometimes does not come back after an update-triggered reboot. A flaky rerun
+# tears down the dead VM and boots a fresh one.
+@flaky(max_runs=3)
 class TestFaultToleranceOpenSource(BasicTestFaultTolerance):
     @MenderTesting.slow
     def test_update_image_breaks_networking(
@@ -577,6 +582,7 @@ class TestFaultToleranceOpenSource(BasicTestFaultTolerance):
         )
 
 
+@flaky(max_runs=3)
 class TestFaultToleranceEnterprise(BasicTestFaultTolerance):
     @MenderTesting.slow
     def test_update_image_breaks_networking(

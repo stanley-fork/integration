@@ -21,6 +21,7 @@ from ..common_setup import (
 from .common_update import update_image, common_update_procedure
 from ..MenderAPI import DeviceAuthV2, Deployments
 from .mendertesting import MenderTesting
+from flaky import flaky
 
 
 class BaseTestSignedUpdates(MenderTesting):
@@ -69,6 +70,9 @@ class BaseTestSignedUpdates(MenderTesting):
             )
 
 
+# Retry the intermittent "Device never rebooted" infra flake: the QEMU VM
+# sometimes does not come back after a reboot. A flaky rerun sets up a fresh VM.
+@flaky(max_runs=3)
 @MenderTesting.fast
 class TestSignedUpdatesOpenSource(BaseTestSignedUpdates):
     def test_signed_artifact_success(
@@ -89,6 +93,7 @@ class TestSignedUpdatesOpenSource(BaseTestSignedUpdates):
         )
 
 
+@flaky(max_runs=3)
 @MenderTesting.fast
 class TestSignedUpdatesEnterprise(BaseTestSignedUpdates):
     def test_signed_artifact_success(
