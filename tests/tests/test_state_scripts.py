@@ -16,6 +16,7 @@ import shutil
 import time
 import os
 import subprocess
+import traceback
 import pathlib
 
 import pytest
@@ -30,6 +31,15 @@ from ..helpers import Helpers
 from ..MenderAPI import DeviceAuthV2, Deployments, logger, image
 from .mendertesting import MenderTesting
 from testutils.infra.device import MenderDeviceGroup
+from flaky import flaky
+
+STATE_SCRIPTS_CLEANUP_CMD = (
+    "systemctl stop mender-updated && "
+    + "rm -f /data/test_state_scripts.log && "
+    + "rm -rf /etc/mender/scripts && "
+    + "rm -rf /data/mender/scripts && "
+    + "systemctl start mender-updated"
+)
 
 
 @pytest.fixture(scope="class")
@@ -58,6 +68,84 @@ def class_persistent_enterprise_setup_client_state_scripts_update_module(
     )
 
     return class_persistent_enterprise_one_client_bootstrapped
+
+
+def _restart_client_container(env):
+    """docker-restart the QEMU client container of this compose project.
+
+    Handles both naming schemes: the standard compose service container
+    ({project}[-_]mender-client[-_]1) and the enterprise client started with
+    'docker compose run --name={project}_mender-client'.
+    """
+    output = subprocess.check_output(
+        ["docker", "ps", "-a", "--format", "{{.ID}} {{.Names}}"]
+    ).decode()
+    for line in output.splitlines():
+        container_id, container_name = line.split(maxsplit=1)
+        if (
+            container_name.startswith((env.name + "_", env.name + "-"))
+            and "mender-client" in container_name
+        ):
+            subprocess.check_call(["docker", "restart", container_id])
+            return
+    raise RuntimeError("client container not found for project %s" % env.name)
+
+
+def _recover_client_if_dead(env):
+    """Heal the QEMU client if the VM died (the "Device never rebooted" infra
+    flake), so the flaky rerun and the remaining class tests get a healthy
+    device. Swallows its own errors: if healing fails we are no worse off.
+    """
+    device = env.device
+    try:
+        device.run("true", hide=True, wait=30)
+        return
+    except Exception:
+        logger.warning(
+            "Device %s unreachable after test, restarting client container",
+            device.host_string,
+        )
+    try:
+        _restart_client_container(env)
+        # Not ssh_is_opened(): its wait is attempts x timeout, not a deadline.
+        device.run("true", hide=True, wait=300)
+        # Re-bootstrap, idempotently: the QEMU disk may or may not have
+        # survived the container restart.
+        device.put(
+            "module-state-scripts-test",
+            local_path=pathlib.Path(__file__).parent.parent.absolute(),
+            remote_path="/usr/share/mender/modules/v3",
+        )
+        device.run(STATE_SCRIPTS_CLEANUP_CMD, wait=60)
+        # If the client lost its disk it generated a new key: accept the
+        # resulting pending auth set. No-op when the device is still accepted.
+        devauth = DeviceAuthV2(env.auth)
+        for d in devauth.get_devices_status(max_wait=60, no_assert=True):
+            for auth_set in d["auth_sets"]:
+                if auth_set["status"] == "pending":
+                    devauth.set_device_auth_set_status(
+                        d["id"], auth_set["id"], "accepted"
+                    )
+    except Exception:
+        logger.error("Could not recover client:\n%s", traceback.format_exc())
+
+
+@pytest.fixture
+def setup_state_scripts_vm_recovery(
+    class_persistent_setup_client_state_scripts_update_module,
+):
+    env = class_persistent_setup_client_state_scripts_update_module
+    yield env
+    _recover_client_if_dead(env)
+
+
+@pytest.fixture
+def enterprise_setup_state_scripts_vm_recovery(
+    class_persistent_enterprise_setup_client_state_scripts_update_module,
+):
+    env = class_persistent_enterprise_setup_client_state_scripts_update_module
+    yield env
+    _recover_client_if_dead(env)
 
 
 TEST_SETS = [
@@ -682,20 +770,16 @@ class BaseTestStateScripts(MenderTesting):
                 assert script_logs.split() == test_set.get("ExpectedScriptFlow")
 
             except:
+                # Fail fast: after a failed reboot the device is often
+                # unreachable, so don't burn 10 min per command on a dead device.
                 output = mender_device.run(
-                    "cat /data/mender/deployment*.log", warn_only=True
+                    "cat /data/mender/deployment*.log", warn_only=True, wait=60
                 )
                 logger.info(output)
                 raise
 
             finally:
-                mender_device.run(
-                    "systemctl stop mender-updated && "
-                    + "rm -f /data/test_state_scripts.log && "
-                    + "rm -rf /etc/mender/scripts && "
-                    + "rm -rf /data/mender/scripts && "
-                    + "systemctl start mender-updated"
-                )
+                mender_device.run(STATE_SCRIPTS_CLEANUP_CMD, wait=60)
 
     def do_test_state_scripts(
         self,
@@ -934,15 +1018,19 @@ class BaseTestStateScripts(MenderTesting):
 
 
 class TestStateScriptsOpenSource(BaseTestStateScripts):
+    # Retry the intermittent "Device never rebooted" infra flake: the QEMU VM
+    # sometimes does not come back after a reboot. The vm-recovery fixture
+    # heals the dead VM between attempts, so the rerun gets a healthy device.
+    @flaky(max_runs=2)
     @pytest.mark.parametrize("description,test_set", REBOOT_TEST_SET)
     def test_reboot_recovery(
         self,
-        class_persistent_setup_client_state_scripts_update_module,
+        setup_state_scripts_vm_recovery,
         description,
         test_set,
     ):
         self.do_test_reboot_recovery(
-            class_persistent_setup_client_state_scripts_update_module,
+            setup_state_scripts_vm_recovery,
             description,
             test_set,
         )
@@ -963,15 +1051,19 @@ class TestStateScriptsOpenSource(BaseTestStateScripts):
 
 
 class TestStateScriptsEnterprise(BaseTestStateScripts):
+    # Retry the intermittent "Device never rebooted" infra flake: the QEMU VM
+    # sometimes does not come back after a reboot. The vm-recovery fixture
+    # heals the dead VM between attempts, so the rerun gets a healthy device.
+    @flaky(max_runs=2)
     @pytest.mark.parametrize("description,test_set", REBOOT_TEST_SET)
     def test_reboot_recovery(
         self,
-        class_persistent_enterprise_setup_client_state_scripts_update_module,
+        enterprise_setup_state_scripts_vm_recovery,
         description,
         test_set,
     ):
         self.do_test_reboot_recovery(
-            class_persistent_enterprise_setup_client_state_scripts_update_module,
+            enterprise_setup_state_scripts_vm_recovery,
             description,
             test_set,
         )
