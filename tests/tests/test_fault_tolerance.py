@@ -388,16 +388,17 @@ class BasicTestFaultTolerance(MenderTesting):
                 mender_device, True, hosts=[blocked_service]
             )
 
+            # In either case the deployment should be marked as finished --
+            # either successfully or as failed.
+            deploy.check_expected_status("finished", deployment_id)
             if success:
                 reboot.verify_reboot_performed()
-                deploy.check_expected_status("finished", deployment_id)
 
                 assert mender_device.get_active_partition() == inactive_part
                 assert mender_device.yocto_id_installed_on_machine() == new_yocto_id
                 reboot.verify_reboot_not_performed()
             else:
                 reboot.verify_reboot_not_performed()
-                deploy.check_expected_status("inprogress", deployment_id)
 
                 assert mender_device.get_active_partition() == active_part
                 assert mender_device.yocto_id_installed_on_machine() == old_yocto_id
