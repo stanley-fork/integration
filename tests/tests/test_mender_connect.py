@@ -241,19 +241,27 @@ class _TestRemoteTerminalBase:
 
         docker_env.device.run("apt-get update")
         docker_env.device.run("apt-get install -y iptables")
-        docker_env.device.run(
-            "iptables -A OUTPUT -j DROP --destination docker.mender.io"
+        gateway_ip = docker_env.device.run(
+            "getent ahosts docker.mender.io | head -n 1 | cut -d ' ' -f1 | head -c -1"
         )
+        assert gateway_ip, "failed to resolve the ip address of the gateway"
+        try:
+            docker_env.device.run(
+                f"iptables -A OUTPUT -j DROP --destination {gateway_ip}"
+            )
 
-        # Plenty of time for the session to mess up
-        # see also QA-1591: the DROP will not cause ICMP response so we rely on the
-        # TCP RTO which means sometimes we need additional time to sleep.
-        # this was exposed by the move to docker client in those tests, as the
-        # network stack acts differently
-        time.sleep(128)
+            # Plenty of time for the session to mess up
+            # see also QA-1591: the DROP will not cause ICMP response so we rely on the
+            # TCP RTO which means sometimes we need additional time to sleep.
+            # this was exposed by the move to docker client in those tests, as the
+            # network stack acts differently
+            time.sleep(128)
 
-        # Re-enable a good connection
-        docker_env.device.run("iptables -D OUTPUT 1")
+        finally:
+            # Re-enable a good connection
+            docker_env.device.run(
+                f"iptables -D OUTPUT -j DROP --destination {gateway_ip}"
+            )
 
         # mender-connect's reconnect backoff escalates per-attempt and caps at
         # 30 minutes (see connectionmanager/exponentialbackoff.go in
