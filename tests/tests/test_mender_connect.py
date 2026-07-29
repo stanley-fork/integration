@@ -181,7 +181,9 @@ class _TestRemoteTerminalBase:
             # Test if a simple command works.
             shell.sendInput("ls /\n".encode())
             output = shell.recvOutput(receive_timeout_s)
-            assert shell.protomsg.props["status"] == protomsg.PROP_STATUS_NORMAL
+            assert (
+                shell.protomsg.props["status"] == protomsg.PROP_STATUS_NORMAL
+            ), f"unexpeted message status, received message: {shell.protomsg}"
             output = output.decode()
             assert "usr" in output
             assert "etc" in output
@@ -190,7 +192,9 @@ class _TestRemoteTerminalBase:
             # Drain any initial output from the prompt. It should end in either "# "
             # (root) or "$ " (user).
             output = shell.recvOutput(receive_timeout_s)
-            assert shell.protomsg.props["status"] == protomsg.PROP_STATUS_NORMAL
+            assert (
+                shell.protomsg.props["status"] == protomsg.PROP_STATUS_NORMAL
+            ), f"unexpeted message status, received message: {shell.protomsg}"
             assert output[-2:].decode() in [
                 "# ",
                 "$ ",
@@ -231,8 +235,10 @@ class _TestRemoteTerminalBase:
                     # Treat it as not-ready and let the retry wait for the device
                     # to release it instead of failing on the assert below.
                     raise TimeoutError("shell from a previous attempt is still running")
-                assert shell.protomsg.props["status"] == protomsg.PROP_STATUS_NORMAL
-                assert body == proto_shell.MSG_BODY_SHELL_STARTED
+                assert (
+                    shell.protomsg.props["status"] == protomsg.PROP_STATUS_NORMAL
+                ), f"unexpeted message status, received message: {shell.protomsg}"
+                assert body == proto_shell.MSG_BODY_SHELL_STARTED, "unexpected body"
 
                 detect_shell_prompt(shell)
                 is_shell_working(shell)
