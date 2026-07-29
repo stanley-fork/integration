@@ -181,7 +181,9 @@ class _TestRemoteTerminalBase:
             # Test if a simple command works.
             shell.sendInput("ls /\n".encode())
             output = shell.recvOutput(receive_timeout_s)
-            assert shell.protomsg.props["status"] == protomsg.PROP_STATUS_NORMAL
+            assert (
+                shell.protomsg.props["status"] == protomsg.PROP_STATUS_NORMAL
+            ), f"unexpeted message status, received message: {shell.protomsg}"
             output = output.decode()
             assert "usr" in output
             assert "etc" in output
@@ -190,7 +192,9 @@ class _TestRemoteTerminalBase:
             # Drain any initial output from the prompt. It should end in either "# "
             # (root) or "$ " (user).
             output = shell.recvOutput(receive_timeout_s)
-            assert shell.protomsg.props["status"] == protomsg.PROP_STATUS_NORMAL
+            assert (
+                shell.protomsg.props["status"] == protomsg.PROP_STATUS_NORMAL
+            ), f"unexpeted message status, received message: {shell.protomsg}"
             assert output[-2:].decode() in [
                 "# ",
                 "$ ",
@@ -231,8 +235,10 @@ class _TestRemoteTerminalBase:
                     # Treat it as not-ready and let the retry wait for the device
                     # to release it instead of failing on the assert below.
                     raise TimeoutError("shell from a previous attempt is still running")
-                assert shell.protomsg.props["status"] == protomsg.PROP_STATUS_NORMAL
-                assert body == proto_shell.MSG_BODY_SHELL_STARTED
+                assert (
+                    shell.protomsg.props["status"] == protomsg.PROP_STATUS_NORMAL
+                ), f"unexpeted message status, received message: {shell.protomsg}"
+                assert body == proto_shell.MSG_BODY_SHELL_STARTED, "unexpected body"
 
                 detect_shell_prompt(shell)
                 is_shell_working(shell)
@@ -241,19 +247,27 @@ class _TestRemoteTerminalBase:
 
         docker_env.device.run("apt-get update")
         docker_env.device.run("apt-get install -y iptables")
-        docker_env.device.run(
-            "iptables -A OUTPUT -j DROP --destination docker.mender.io"
+        gateway_ip = docker_env.device.run(
+            "getent ahosts docker.mender.io | head -n 1 | cut -d ' ' -f1 | head -c -1"
         )
+        assert gateway_ip, "failed to resolve the ip address of the gateway"
+        try:
+            docker_env.device.run(
+                f"iptables -A OUTPUT -j DROP --destination {gateway_ip}"
+            )
 
-        # Plenty of time for the session to mess up
-        # see also QA-1591: the DROP will not cause ICMP response so we rely on the
-        # TCP RTO which means sometimes we need additional time to sleep.
-        # this was exposed by the move to docker client in those tests, as the
-        # network stack acts differently
-        time.sleep(128)
+            # Plenty of time for the session to mess up
+            # see also QA-1591: the DROP will not cause ICMP response so we rely on the
+            # TCP RTO which means sometimes we need additional time to sleep.
+            # this was exposed by the move to docker client in those tests, as the
+            # network stack acts differently
+            time.sleep(128)
 
-        # Re-enable a good connection
-        docker_env.device.run("iptables -D OUTPUT 1")
+        finally:
+            # Re-enable a good connection
+            docker_env.device.run(
+                f"iptables -D OUTPUT -j DROP --destination {gateway_ip}"
+            )
 
         # mender-connect's reconnect backoff escalates per-attempt and caps at
         # 30 minutes (see connectionmanager/exponentialbackoff.go in
