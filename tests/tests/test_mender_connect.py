@@ -42,6 +42,21 @@ from .common_connect import wait_for_connect
 
 container_factory = factory.get_factory()
 
+# Errors mender-connect returns when a shell from an earlier attempt has not
+# been reaped yet, see session/shell.go in mender-connect. Both mean "try again
+# later", not "the protocol is broken".
+#
+# Which one you get depends on the session id: routeMessageSpawnShell looks the
+# session up by the id in the message, so a *new* websocket (new id) always goes
+# through NewMenderShellSession and hits the per-user limit ("too many open
+# sessions"), while reusing a websocket hits StartShell ("already running").
+# assert_working_shell opens a fresh websocket per attempt, so in practice only
+# the first is reachable there. (QA-1591)
+SHELL_NOT_REAPED_ERRORS = (
+    b"shell is already running",
+    b"user has too many open sessions",
+)
+
 
 class _TestRemoteTerminalBase:
     @flaky(max_runs=3)
@@ -228,13 +243,21 @@ class _TestRemoteTerminalBase:
                 if (
                     shell.protomsg.props["status"] != protomsg.PROP_STATUS_NORMAL
                     and body
-                    and b"already running" in body
+                    and any(err in body for err in SHELL_NOT_REAPED_ERRORS)
                 ):
-                    # A shell started by a previous attempt that flapped mid-use
-                    # may not be reaped yet (the shell limit is 1 per device).
-                    # Treat it as not-ready and let the retry wait for the device
-                    # to release it instead of failing on the assert below.
-                    raise TimeoutError("shell from a previous attempt is still running")
+                    # A shell started by a previous attempt may not be reaped
+                    # yet (the per-user session limit is 1). During the reconnect
+                    # churn below, deviceconnect closes a device connection as
+                    # soon as a newer one arrives for the same device, so a shell
+                    # started seconds earlier can lose its transport. We cannot
+                    # stop that shell ourselves - the websocket is already gone -
+                    # so mender-connect only releases the session once its health
+                    # check fails (60s+5s) and the next sweep runs (32s), i.e.
+                    # up to ~100s. Treat it as not-ready and let the retry wait
+                    # that out instead of failing on the assert below.
+                    raise TimeoutError(
+                        "shell from a previous attempt is still running: %s" % body
+                    )
                 assert (
                     shell.protomsg.props["status"] == protomsg.PROP_STATUS_NORMAL
                 ), f"unexpeted message status, received message: {shell.protomsg}"
