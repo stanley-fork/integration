@@ -1,21 +1,46 @@
+// renovate.json5 - Mender dependency update configuration for integration
+// See Documentation/dependency-updates.md in mender-qa for the process.
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+
   "extends": [
     "config:recommended",
     ":gitSignOff",
     ":rebaseStalePrs"
   ],
-  "reviewers": ["team:qa-dependabot-reviewers"],
 
-  "packageRules": [
-    {
-      // TODO: remove some of these when we ditch dependabot
-      "matchCategories": ["python", "docker", "ci"],
-      "enabled": false
-    },
-  ],
+  // CODEOWNERS drives reviewer assignment - keep its dependency file entries current.
+  "reviewersFromCodeOwners": true,
 
+  // fix(deps): <desc>, per renovate.json5.sample in mender-qa.
+  "semanticCommits": "enabled",
+  "semanticCommitType": "fix",
+  "semanticCommitScope": "deps",
+
+  // Fallback window for weeks with no merges; the renovate CI job is the primary trigger.
+  "schedule": ["after 10pm on Monday", "before 6am on Tuesday"],
+
+  // Was prHourlyLimit 0 (unlimited) while Dependabot still owned most ecosystems.
+  "prHourlyLimit": 2,
+  "prConcurrentLimit": 5,
+
+  // master plus 3.8.x, which is still live (last commit 2026-06-15). The older
+  // maintenance branches are dormant - 3.7.x last moved 2025-03, 3.6.x 2024-08,
+  // 3.5.x 2023-04 - so they are left out.
+  "baseBranchPatterns": ["master", "3.8.x"],
+
+  // Security PRs bypass the schedule and automerge when CI is green.
+  "vulnerabilityAlerts": {
+    "enabled": true,
+    "schedule": ["at any time"],
+    "automerge": true,
+    "automergeType": "pr",
+    "labels": ["security"]
+  },
+
+  // MENDER_ARTIFACT_VERSION is pinned in two places in this repo.
   "customManagers": [
+    // .gitlab-ci.yml, as a variable block with value:
     {
       "customType": "regex",
       "managerFilePatterns": ["/.gitlab-ci.yml/"],
@@ -27,6 +52,7 @@
       "extractVersionTemplate": "^v?(?<version>.*)$",
       "versioningTemplate": "semver"
     },
+    // .env, as a plain assignment
     {
       "customType": "regex",
       "managerFilePatterns": ["/.env/"],
@@ -37,8 +63,53 @@
       "datasourceTemplate": "github-releases",
       "extractVersionTemplate": "^v?(?<version>.*)$",
       "versioningTemplate": "semver"
-    },
+    }
   ],
 
-  "prHourlyLimit": 0
+  "packageRules": [
+    // config:recommended pulls in :semanticPrefixFixDepsChoreOthers, which forces
+    // semanticCommitType back to "chore" for any dep whose manager does not tag it
+    // with an npm/pip style depType - that is every docker and compose dep here.
+    // Must stay BEFORE the gitlabci rule: rules apply in order and the last match
+    // wins, so gitlabci keeps its own type.
+    {
+      "matchPackageNames": ["*"],
+      "semanticCommitType": "fix"
+    },
+
+    // CI image bumps get ci: instead of fix(deps):
+    {
+      "matchManagers": ["gitlabci", "gitlabci-include"],
+      "semanticCommitType": "ci",
+      "semanticCommitScope": ""
+    },
+
+    // Python: one PR for tests/requirements-python and extra/requirements.txt.
+    {
+      "matchManagers": ["pip_requirements"],
+      "groupName": "python-dependencies",
+      "groupSlug": "python-dependencies"
+    },
+
+    // 17 docker-compose files at the root, so group them into one PR. Only literal
+    // image tags are tracked - the ${MENDER_SERVER_*} ones are release tooling's job.
+    {
+      "matchManagers": ["docker-compose"],
+      "groupName": "docker-compose",
+      "groupSlug": "docker-compose"
+    },
+
+    // extra/gitdm/gitdm is a third-party submodule Dependabot never updated either.
+    {
+      "matchManagers": ["git-submodules"],
+      "enabled": false
+    },
+
+    // No major bumps on the maintenance branch - that needs a backport decision.
+    {
+      "matchBaseBranches": ["/^\\d+\\.\\d+\\.x$/"],
+      "matchUpdateTypes": ["major"],
+      "enabled": false
+    }
+  ]
 }
