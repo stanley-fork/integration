@@ -16,6 +16,7 @@ include:
   - component: gitlab.com/Northern.tech/Mender/mendertesting/renovate@master
     inputs:
       stage: "renovate"
+      runner: "k8s"
 
 default:
   tags: !reference [.qa-common-default-runner, tags]
